@@ -746,20 +746,132 @@ class ZSXQDownloader:
         try:
             # 步骤 2: 点击文件元素打开弹窗
             print("   🖱️  点击文件元素...")
-            center_x = file_obj['x'] + file_obj['width'] / 2
-            center_y = file_obj['y'] + file_obj['height'] / 2
-            print(f"   📍 点击坐标: ({center_x:.1f}, {center_y:.1f})")
             
-            # 滚动到大概位置 (Playwright mouse click 不需要严格 scrollIntoView，但为了保险)
-            # self.page.evaluate(f"window.scrollTo({file_obj['x']}, {file_obj['y']})")
+            # 使用 JS 精确匹配并点击，这是最可靠的方式，避免 Playwright 选择器的模糊匹配问题
+            js_click_exact = r"""
+            (filename) => {
+                // 辅助函数：判断元素是否可见
+                function isVisible(el) {
+                    if (!el) return false;
+                    const style = window.getComputedStyle(el);
+                    return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetWidth > 0 && el.offsetHeight > 0;
+                }
+
+                const allElements = document.querySelectorAll('div, span, li, a, p'); // 限制搜索标签范围，提高效率
+                const targetName = filename.trim();
+                
+                let bestEl = null;
+                
+                for (const el of allElements) {
+                    if (!isVisible(el)) continue;
+                    
+                    const text = (el.innerText || el.textContent || "").trim();
+                    
+                    // 1. 绝对精确匹配
+                    if (text === targetName) {
+                        // 找到精确匹配，立即点击并返回
+                        el.scrollIntoView({block: "center", behavior: "instant"});
+                        el.click();
+                        return {success: true, method: "exact_match"};
+                    }
+                }
+                
+                // 如果没有精确匹配，尝试查找包含文件名的最小容器
+                for (const el of allElements) {
+                    if (!isVisible(el)) continue;
+                    const text = (el.innerText || el.textContent || "").trim();
+                    
+                    if (text.includes(targetName)) {
+                        // 确保这个元素不是包含了太多其他内容的大容器
+                        // 比如文件名长度是 20，元素文本长度不应超过 50
+                        if (text.length < targetName.length + 30) {
+                            el.scrollIntoView({block: "center", behavior: "instant"});
+                            el.click();
+                            return {success: true, method: "container_match"};
+                        }
+                    }
+                }
+
+                return {success: false, method: "none"};
+            }
+            """
             
-            self.page.mouse.click(center_x, center_y)
+            try:
+                print(f"   🔍 正在使用 JS 精确匹配点击: '{expected_filename}'")
+                result = self.page.evaluate(js_click_exact, expected_filename)
+                
+                if result['success']:
+                    print(f"   ✅ JS 点击成功 (策略: {result['method']})")
+                else:
+                    print("   ⚠️  JS 精确匹配未找到元素，尝试 Playwright 模糊定位...")
+                    # 回退到 Playwright 的模糊定位
+                    self.page.get_by_text(expected_filename, exact=False).first.click()
+                    
+            except Exception as e:
+                print(f"   ⚠️  点击操作异常: {e}")
+                print("   🔄 尝试使用原始坐标点击 (最后防线)...")
+                center_x = file_obj['x'] + file_obj['width'] / 2
+                center_y = file_obj['y'] + file_obj['height'] / 2
+                self.page.mouse.click(center_x, center_y)
+
             time.sleep(3) # 等待弹窗
             
             # 步骤 3: 等待弹窗出现 (文件详情)
             try:
                 self.page.wait_for_selector("text=文件详情", timeout=5000)
                 print("   ✅ 弹框已打开")
+                
+                # 3.1 验证弹窗标题是否与预期文件名一致
+                print("   🛡️  验证弹窗文件名...")
+                try:
+                    # 查找弹窗中的文件名元素（通常是大字标题）
+                    # 这里尝试获取弹窗内包含 expected_filename 的文本
+                    # 或者获取弹窗内最大的文本元素
+                    js_check_title = r"""
+                    (expected) => {
+                        const modal = document.querySelector("div[role='dialog']") || document.body;
+                        const elements = modal.querySelectorAll("*");
+                        let found = false;
+                        let maxFontSize = 0;
+                        let bestText = "";
+
+                        elements.forEach(el => {
+                            const text = el.innerText?.trim() || "";
+                            if (!text) return;
+                            const style = window.getComputedStyle(el);
+                            const fontSize = parseFloat(style.fontSize);
+                            
+                            if (text.includes(expected) || expected.includes(text)) {
+                                found = true;
+                            }
+                            
+                            // 记录最大的文字，通常是标题
+                            if (fontSize > maxFontSize && text.length < 100) {
+                                maxFontSize = fontSize;
+                                bestText = text;
+                            }
+                        });
+                        return { found, bestText };
+                    }
+                    """
+                    check_result = self.page.evaluate(js_check_title, expected_filename)
+                    
+                    if not check_result['found']:
+                        print(f"   ⚠️  警告：弹窗内未找到预期文件名 '{expected_filename}'")
+                        print(f"   ℹ️  弹窗显示的主标题可能是: '{check_result['bestText']}'")
+                        # 这里可以选择是否抛出异常，或者继续尝试
+                        # 为了安全起见，如果不匹配，我们可以选择跳过
+                        if check_result['bestText'] and len(check_result['bestText']) > 2:
+                             # 简单的相似度检查
+                             if check_result['bestText'] not in expected_filename and expected_filename not in check_result['bestText']:
+                                 print("   ❌ 文件名严重不匹配，取消下载当前文件")
+                                 return False
+                    else:
+                        print("   ✅ 文件名验证通过")
+                        
+                except Exception as check_e:
+                    print(f"   ⚠️  文件名验证过程出错: {check_e}")
+                    
             except:
                 print("   ⚠️  未检测到弹框，尝试继续查找下载按钮")
 
@@ -951,6 +1063,8 @@ class ZSXQDownloader:
             self.context.remove_listener("download", handle_download)
             # 步骤 6: 关闭弹窗
             self._close_modal()
+            # 确保清理临时文件（无论成功失败）
+            self._cleanup_temp()
 
         return False
 
@@ -1019,6 +1133,7 @@ class ZSXQDownloader:
         if self.playwright:
             self.playwright.stop()
             print("\n✅ Playwright 已关闭")
+        self._remove_temp_dir()
 
 # 主程序入口
 def main():

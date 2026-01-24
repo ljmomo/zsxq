@@ -35,6 +35,16 @@ def test_manual():
             subs = core.get_subscriptions(scroll_attempts=2)
             for sub in subs:
                 print(f" - {sub['name']}")
+                
+            if subs:
+                print(f"Selecting first subscription: {subs[0]['name']}")
+                core.open_subscription(subs[0])
+                print("Entered subscription.")
+                
+                print("Entering files section...")
+                core.enter_files_section()
+                print("Entered files section.")
+
         
     except Exception as e:
         print(f"Error: {e}")
