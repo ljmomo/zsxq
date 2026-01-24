@@ -1,7 +1,7 @@
 # 忽略持久化登录数据
 browser_data/zsxq/
+browser_data/test_user/
 
 # 忽略下载输出目录
 downloads/
 __pycache__/
-
