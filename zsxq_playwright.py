@@ -10,10 +10,144 @@
 """
 
 import time
+import os
+from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 class ZSXQDownloader:
+    # ========== 常量定义 ==========
+    FILE_EXTENSIONS = ['.mp3', '.doc', '.docx']
+    DETAIL_FILE_EXTENSIONS = ['.docx', '.doc', '.pdf', '.mp3', '.mp4', '.zip', '.rar', '.txt', '.xls', '.xlsx', '.ppt', '.pptx']
+    COMMENT_KEYWORDS = ['评论', '回复', '留言', 'comment', 'reply', '评论区', '回复区', '留言区', '评论者', '回复者', '评论加载中']
+    BOOK_KEYWORDS = ['《', '》', '投资', '理财', '金融', '经济', '商业', '管理', '营销']
+    EXCLUDED_TEXTS = ['下载', '分享', '返回', '首页', '星球', '文件']
+    
+    # ========== JavaScript 脚本 ==========
+    JS_FIND_DOWNLOAD_BUTTON = """
+        () => {
+            const allElements = document.querySelectorAll('*');
+            let bestButton = null;
+            let bestScore = 0;
+            
+            for (let el of allElements) {
+                const text = el.innerText?.trim() || '';
+                const rect = el.getBoundingClientRect();
+                const styles = window.getComputedStyle(el);
+                
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                if (styles.display === 'none' || styles.visibility === 'hidden') continue;
+                
+                let score = 0;
+                if (text === '下载') score = 100;
+                else if (text.includes('下载') && text.length < 20) score = 80;
+                else if (text.includes('下载')) score = 50;
+                if (styles.cursor === 'pointer') score += 10;
+                if (el.tagName === 'BUTTON' || el.tagName === 'A') score += 10;
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestButton = { text, x: rect.x, y: rect.y, width: rect.width, height: rect.height, score };
+                }
+            }
+            return bestButton;
+        }
+    """
+    
+    def _find_download_button(self):
+        """查找下载按钮（使用智能评分系统）"""
+        return self.page.evaluate(self.JS_FIND_DOWNLOAD_BUTTON)
+    
+    def _close_popup(self):
+        """关闭弹窗（多种方式确保关闭）"""
+        print("      🔙 关闭弹窗...")
+        try:
+            # 方式1: 点击关闭按钮
+            close_buttons = self.page.locator('[class*="close"], [class*="Close"], [aria-label*="关闭"], [aria-label*="close"]')
+            if close_buttons.count() > 0:
+                try:
+                    close_buttons.first.click(force=True)
+                    time.sleep(0.5)
+                except:
+                    pass
+            
+            # 方式2: 按 Escape 键
+            self.page.keyboard.press("Escape")
+            time.sleep(0.5)
+            
+            # 方式3: 点击页面左上角（弹窗外部区域）
+            self.page.mouse.click(50, 50)
+            time.sleep(0.5)
+            
+            # 方式4: 再次按 Escape 键
+            self.page.keyboard.press("Escape")
+            time.sleep(1)
+            
+            print("      ✅ 弹窗关闭操作完成")
+        except Exception as e:
+            print(f"      ⚠️  关闭弹窗失败: {e}")
+    
+    def _save_download(self, download, file_name):
+        """保存下载文件"""
+        target_path = self.download_dir / file_name
+        download.save_as(str(target_path))
+        print(f"      ✅ 已保存: {file_name}")
+        return True
+    
+    def _click_file_element(self, file_info):
+        """点击文件元素（使用定位器或坐标）"""
+        file_name = file_info.get('fileName', '')
+        
+        # 尝试使用定位器点击
+        try:
+            locator = self.page.get_by_text(file_name, exact=False)
+            if locator.count() > 0:
+                locator.first.click(force=True)
+                print("      ✅ 使用定位器点击元素")
+                return True
+        except Exception as e:
+            print(f"      ⚠️  定位器点击失败: {e}")
+        
+        # 回退到坐标点击
+        click_x = file_info['x'] + file_info['width'] / 2
+        click_y = file_info['y'] + file_info['height'] / 2
+        self.page.mouse.click(click_x, click_y)
+        print(f"      ✅ 使用坐标点击: ({click_x:.0f}, {click_y:.0f})")
+        return True
+    
+    def _save_books_to_markdown(self, file_list, link_title):
+        """保存书籍列表到 markdown 文件"""
+        if not file_list:
+            return
+        
+        # 按分类分组
+        category_groups = {}
+        for f in file_list:
+            category = f.get('category', '未分类')
+            if category not in category_groups:
+                category_groups[category] = []
+            category_groups[category].append(f)
+        
+        # 生成 markdown 内容
+        md_content = f"# 书籍列表: {link_title}\n\n"
+        md_content += f"**总数量**: {len(file_list)} 个\n\n"
+        
+        for category, items in category_groups.items():
+            md_content += f"## 📂 {category} ({len(items)} 个)\n\n"
+            for i, item in enumerate(items, 1):
+                md_content += f"{i}. **{item['fileName']}** (`{item['type']}`)\n"
+            md_content += "\n"
+        
+        # 保存到文件
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"books_list_{timestamp}.md"
+        filepath = self.download_dir / filename
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(md_content)
+        
+        print(f"   📝 书籍列表已保存到: {filepath}")
+     
     def __init__(self, download_dir="./downloads", user_data_dir="./browser_data/zsxq"):
         """初始化
         
@@ -400,7 +534,7 @@ class ZSXQDownloader:
                 existing_modal = self.page.query_selector("text=文件详情")
                 if existing_modal and existing_modal.is_visible():
                     print("   ⚠️  检测到残留弹窗，先关闭...")
-                    self._close_modal()
+                    self._close_popup()
                     time.sleep(1)
             except:
                 pass
@@ -578,7 +712,7 @@ class ZSXQDownloader:
                                     except Exception as e2:
                                         print(f"   ❌ 备用方法也失败: {e2}")
                             
-                            self._close_modal()
+                            self._close_popup()
                             return True
                     except Exception as e:
                         print(f"   ⚠️  坐标点击失败: {e}")
@@ -629,7 +763,7 @@ class ZSXQDownloader:
                                         except Exception as e2:
                                             print(f"   ❌ 备用方法也失败: {e2}")
                                 
-                                self._close_modal()
+                                self._close_popup()
                                 return True
                             else:
                                 print("   ⚠️  JS点击未触发下载")
@@ -670,7 +804,7 @@ class ZSXQDownloader:
                                             except Exception as e2:
                                                 print(f"   ❌ 备用方法也失败: {e2}")
                                     
-                                    self._close_modal()
+                                    self._close_popup()
                                     return True
                             except:
                                 continue
@@ -680,47 +814,13 @@ class ZSXQDownloader:
             # 所有尝试都失败
             if not download_triggered:
                 print("   ❌ 所有点击尝试都失败")
-                self._close_modal()
+                self._close_popup()
                 return False
                 
         except Exception as e:
             print(f"   ❌ 异常: {e}")
-            self._close_modal()
+            self._close_popup()
             return False
-    
-    def _close_modal(self):
-        """关闭弹窗（多种方式确保关闭）"""
-        print("   🚪 关闭弹窗...")
-        try:
-            # 方式1: 按Escape键
-            self.page.keyboard.press("Escape")
-            time.sleep(1)
-            
-            # 验证弹窗是否关闭（检查"文件详情"是否还在）
-            try:
-                modal_still_exists = self.page.query_selector("text=文件详情")
-                if modal_still_exists and modal_still_exists.is_visible():
-                    print("   ⚠️  Escape键未关闭弹窗，尝试其他方式...")
-                    
-                    # 方式2: 查找并点击关闭按钮（X按钮）
-                    close_button = self.page.query_selector('[class*="close"], [class*="Close"], [aria-label*="关闭"], [aria-label*="close"]')
-                    if close_button:
-                        print("   👆 点击关闭按钮...")
-                        close_button.click()
-                        time.sleep(1)
-                    else:
-                        # 方式3: 点击弹窗外部区域（遮罩层）
-                        print("   👆 点击外部区域...")
-                        # 点击屏幕左上角（通常是遮罩层）
-                        self.page.mouse.click(50, 50)
-                        time.sleep(1)
-                else:
-                    print("   ✅ 弹窗已关闭")
-            except:
-                print("   ✅ 弹窗已关闭")
-                
-        except Exception as e:
-            print(f"   ⚠️  关闭弹窗异常: {e}")
     
     def extract_article_files(self):
         """从文章页面提取文件信息
@@ -934,51 +1034,55 @@ class ZSXQDownloader:
                     try {
                         const text = el.innerText?.trim() || '';
                         // 识别分类标题（如【财商类】）
-                        if (text.match(/【.+?】/)) {
-                            console.log('找到分类:', text);
+                        let currentCategory = '未分类';
+                        const categoryMatch = text.match(/【(.+?)】/);
+                        if (categoryMatch) {
+                            currentCategory = categoryMatch[1];
+                            console.log('找到分类:', currentCategory);
+                        }
+                        
+                        // 查找该分类下的书籍条目
+                        let sibling = el.nextElementSibling;
+                        while (sibling && sibling.tagName !== 'H1' && sibling.tagName !== 'H2') {
+                            const siblingText = sibling.innerText?.trim() || '';
+                            const siblingLinks = sibling.querySelectorAll('a');
                             
-                            // 查找该分类下的书籍条目
-                            let sibling = el.nextElementSibling;
-                            while (sibling && sibling.tagName !== 'H1' && sibling.tagName !== 'H2') {
-                                const siblingText = sibling.innerText?.trim() || '';
-                                const siblingLinks = sibling.querySelectorAll('a');
-                                
-                                siblingLinks.forEach(link => {
-                                    try {
-                                        const linkText = link.innerText?.trim() || '';
-                                        const href = link.href || '';
+                            siblingLinks.forEach(link => {
+                                try {
+                                    const linkText = link.innerText?.trim() || '';
+                                    const href = link.href || '';
+                                    
+                                    if (href && linkText.length >= 5 && linkText.length < 100) {
+                                        let bookName = linkText;
+                                        const bookMatch = linkText.match(/《(.+?)》/);
+                                        if (bookMatch) {
+                                            bookName = bookMatch[1].trim();
+                                        }
                                         
-                                        if (href && linkText.length >= 5 && linkText.length < 100) {
-                                            let bookName = linkText;
-                                            const bookMatch = linkText.match(/《(.+?)》/);
-                                            if (bookMatch) {
-                                                bookName = bookMatch[1].trim();
-                                            }
-                                            
-                                            if (!seenFiles.has(bookName)) {
-                                                seenFiles.add(bookName);
-                                                const rect = link.getBoundingClientRect();
-                                                if (rect.width > 0 && rect.height > 0) {
-                                                    results.push({
-                                                        fileName: bookName,
-                                                        href: href,
-                                                        text: linkText,
-                                                        x: rect.x,
-                                                        y: rect.y,
-                                                        width: rect.width,
-                                                        height: rect.height,
-                                                        type: 'book_link'
-                                                    });
-                                                }
+                                        if (!seenFiles.has(bookName)) {
+                                            seenFiles.add(bookName);
+                                            const rect = link.getBoundingClientRect();
+                                            if (rect.width > 0 && rect.height > 0) {
+                                                results.push({
+                                                    fileName: bookName,
+                                                    href: href,
+                                                    text: linkText,
+                                                    category: currentCategory,
+                                                    x: rect.x,
+                                                    y: rect.y,
+                                                    width: rect.width,
+                                                    height: rect.height,
+                                                    type: 'book_link'
+                                                });
                                             }
                                         }
-                                    } catch (e) {
-                                        // 忽略异常
                                     }
-                                });
-                                
-                                sibling = sibling.nextElementSibling;
-                            }
+                                } catch (e) {
+                                    // 忽略异常
+                                }
+                            });
+                            
+                            sibling = sibling.nextElementSibling;
                         }
                     } catch (e) {
                         // 忽略异常
@@ -1155,17 +1259,36 @@ class ZSXQDownloader:
         
         print(f"   📊 找到 {len(filtered_list)} 个书籍/文件条目")
         
-        # 显示文件列表
-        for i, file_info in enumerate(filtered_list[:10], 1):
-            print(f"      [{i}] {file_info['fileName']} ({file_info['type']})")
+        # 按分类分组
+        category_groups = {}
+        for f in filtered_list:
+            category = f.get('category', '未分类')
+            if category not in category_groups:
+                category_groups[category] = []
+            category_groups[category].append(f)
+        
+        # 按分类打印
+        for category, items in category_groups.items():
+            print(f"\n   📂 {category} ({len(items)} 个)")
+            for i, file_info in enumerate(items[:5], 1):
+                print(f"      [{i}] {file_info['fileName']} ({file_info['type']})")
+            if len(items) > 5:
+                print(f"      ... 还有 {len(items) - 5} 个")
         
         if len(filtered_list) > 10:
-            print(f"      ... 还有 {len(filtered_list) - 10} 个")
+            print(f"\n   📊 共 {len(filtered_list)} 个条目")
         
         # 显示过滤统计
         filtered_count = len(file_list) - len(filtered_list)
         if filtered_count > 0:
             print(f"      📊 已过滤 {filtered_count} 个非书籍条目（评论、回复等）")
+        
+        # 保存书籍列表到 markdown 文件
+        try:
+            page_title = self.page.title()[:50] if self.page.title() else "未知"
+            self._save_books_to_markdown(filtered_list, page_title)
+        except Exception as e:
+            print(f"   ⚠️  保存书籍列表失败: {e}")
         
         return filtered_list
     
