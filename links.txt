@@ -1,0 +1,9 @@
+# 知识星球链接配置文件
+# 每行一个链接，以 # 开头的行为注释会被忽略
+
+# 示例链接格式（替换为实际链接）:
+# https://wx.zsxq.com/group/454548818428/topic/215121512511251
+# 使用方法:
+# 1. 将博主分享的文章链接粘贴到下方
+# 2. 运行: python zsxq_playwright.py --mode links --links-file ./links.txt
+https://wx.zsxq.com/group/454548818428/topic/215121512511251
