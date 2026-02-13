@@ -1,71 +1,153 @@
-# 使用说明书
+# 知识星球文件下载器
 
-## 简介
-- 本工具用于批量下载「知识星球」某订阅星球的文件，支持持久化登录、滚动加载、交互选择与文件列表打印。
+一个基于 Playwright 的知识星球文件自动下载工具，支持从链接解析并批量下载文件。
 
-## 环境要求
-- 操作系统：Windows
-- Python：3.x
-- 依赖：playwright
-  - 安装依赖：
-    - pip install playwright
-    - python -m playwright install
+## 功能特性
 
-## 目录说明
-- 下载目录：./downloads/zsxq_files（自动创建）
-- 临时目录：./downloads/zsxq_files/temp_cache（下载中间目录，成功后自动清理）
-- 登录数据：./browser_data/zsxq（持久化登录态）
+- ✅ **链接解析下载**：从给定的链接中解析并下载文件
+- ✅ **智能评论过滤**：自动过滤评论、回复等非书籍内容
+- ✅ **智能下载按钮识别**：使用评分系统精确识别下载按钮
+- ✅ **文件命名**：使用解析出来的文件名保存
+- ✅ **弹窗自动关闭**：多种方式确保弹窗正确关闭
+- ✅ **多文件下载**：支持批量下载多个文件
+- ✅ **登录状态保存**：无需每次重新登录
 
 ## 快速开始
-1. 打开并运行主脚本：[zsxq_playwright.py](file:///d:/aicode/zsxq/zsxq_playwright.py)
-2. 首次运行需在弹出浏览器中手动登录，随后状态自动保存
-3. 程序会打印订阅星球列表（仅 /group），输入序号或名称选择目标星球
-4. 自动进入该星球后点击右侧“星球文件”入口
-5. 输入滚动次数（确认加载更多文件的次数）
-6. 打印所有采集到的文件列表
-7. 输入下载数量（回车表示默认值/全部）并开始批量下载
-8. 下载完成后临时目录自动清理
 
-## 运行步骤（详细）
-- 运行：python d:\aicode\zsxq\zsxq_playwright.py
-- 登录：若未登录，按提示在浏览器中完成，然后回车继续
-- 选择订阅：根据打印列表输入订阅序号或名称（仅 /group 链接）
-  - 相关方法：[list_subscriptions](file:///d:/aicode/zsxq/zsxq_playwright.py#L127-L231) [choose_subscription](file:///d:/aicode/zsxq/zsxq_playwright.py#L255-L270)
-- 点击文件入口：[click_files_entry](file:///d:/aicode/zsxq/zsxq_playwright.py#L197-L245)
-- 输入滚动次数：控制采集时滚动加载的次数（默认 100 或 main 中配置的 FILES_SCROLL_LIMIT）
-  - 相关方法：[prompt_scroll_attempts](file:///d:/aicode/zsxq/zsxq_playwright.py#L661-L673)
-- 打印文件列表：[print_files](file:///d:/aicode/zsxq/zsxq_playwright.py#L244-L252)
-- 选择下载数量：输入 N 或回车使用默认/全部
-  - 相关方法：[prompt_download_count](file:///d:/aicode/zsxq/zsxq_playwright.py#L643-L660)
-- 批量下载：坐标点击/JS 点击触发下载，事件监听兜底；若事件未触发则从临时目录中移动稳定文件到目标目录
-  - 相关方法：[download_file](file:///d:/aicode/zsxq/zsxq_playwright.py#L510-L744) [wait_for_completed_file](file:///d:/aicode/zsxq/zsxq_playwright.py#L425-L447)
+### 1. 安装依赖
 
-## 配置项
-- 在 [main](file:///d:/aicode/zsxq/zsxq_playwright.py#L968-L1005) 中调整：
-  - PLANET_NAME：默认目标星球名（当你在订阅选择阶段回车跳过时使用）
-  - DOWNLOAD_DIR：下载保存目录
-  - USER_DATA_DIR：登录数据目录
-  - MAX_FILES：默认下载数量（回车时使用该默认值；为空代表全部）
-  - SUBS_SCROLL_LIMIT：订阅列表滚动次数上限
-  - FILES_SCROLL_LIMIT：文件列表滚动次数默认值
+```bash
+pip install playwright
+playwright install chromium
+```
 
-## 常见问题与解决
-- 浏览器无法启动：请关闭所有 Chromium/Chrome 窗口，检查数据目录锁定或以管理员运行
-- 未找到“星球文件”：页面结构变化时，使用工具的兜底提示手动点击；随后流程继续
-- 下载事件未触发：工具会在临时目录中检测稳定文件并移动到目标目录
-- 采集不全：提高滚动次数或延长 pause；订阅采集仅保留 /group 链接，确保你的订阅在该列表中
+### 2. 首次使用（登录）
 
-## 结果与输出
-- 成功下载的文件保存在 DOWNLOAD_DIR
-- 临时目录在批量下载结束后删除（防止缓存残留）
-- 控制台打印：订阅列表、滚动次数确认信息、文件列表、下载进度与统计
+```bash
+python3 zsxq_playwright.py
+```
+
+在浏览器中登录知识星球，然后关闭浏览器。
+
+### 3. 使用链接解析模式
+
+```bash
+# 创建链接配置文件
+echo "https://wx.zsxq.com/group/xxx/topic/xxx" > links.txt
+
+# 运行程序
+python3 zsxq_playwright.py --mode links --links-file ./links.txt
+```
+
+## 使用方式
+
+### 命令行参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--mode` | 运行模式（files/links/both） | `files` |
+| `--links-file` | 链接列表文件路径 | `./links.txt` |
+| `--download-dir` | 下载目录 | `./downloads` |
+| `--max-links` | 最大处理链接数 | 无限制 |
+
+### 运行模式
+
+| 模式 | 说明 |
+|------|------|
+| `files` | 星球文件下载模式（默认） |
+| `links` | 链接解析下载模式 |
+| `both` | 同时执行两种模式 |
+
+### 示例
+
+```bash
+# 星球文件下载模式（默认）
+python3 zsxq_playwright.py
+
+# 链接解析模式
+python3 zsxq_playwright.py --mode links
+
+# 指定链接文件和下载目录
+python3 zsxq_playwright.py --mode links --links-file ./my_links.txt --download-dir ./my_downloads
+
+# 限制处理链接数
+python3 zsxq_playwright.py --mode links --max-links 10
+```
+
+## 文档
+
+- [需求文档](docs/REQUIREMENTS.md)
+- [技术方案文档](docs/TECHNICAL.md)
+- [使用文档](docs/USAGE.md)
+
+## 核心流程
+
+```
+初始页面 → 提取书籍列表(过滤评论) → 导航到详情页 
+→ 提取附件(过滤评论) → 点击附件 → 智能评分找下载按钮 
+→ 点击下载 → 使用解析的文件名保存 → 关闭弹窗 → 返回初始页面
+```
+
+## 支持的文件类型
+
+- `.mp3` - 音频文件
+- `.doc` - Word 文档
+- `.docx` - Word 文档
+
+## 项目结构
+
+```
+zsxq/
+├── zsxq_playwright.py      # 主程序
+├── test_detailed_flow.py   # 测试脚本
+├── links.txt               # 链接配置文件
+├── browser_data/           # 浏览器数据目录
+├── downloads/              # 下载目录
+└── docs/                   # 文档目录
+    ├── REQUIREMENTS.md     # 需求文档
+    ├── TECHNICAL.md        # 技术方案文档
+    └── USAGE.md            # 使用文档
+```
+
+## 常见问题
+
+### 登录问题
+
+如果提示"请先登录知识星球"：
+
+```bash
+# 删除浏览器数据目录
+rm -rf ./browser_data
+
+# 重新运行程序并登录
+python3 zsxq_playwright.py
+```
+
+### 下载失败
+
+1. 检查网络连接
+2. 检查登录状态
+3. 查看控制台错误信息
 
 ## 注意事项
-- 该工具依赖页面 DOM 结构，若界面升级需要更新选择器与过滤策略
-- 登录数据仅用于本地持久化，不要提交到远程仓库
 
-## 进一步扩展
-- 命令行参数支持（非交互）
-- 文件类型与关键字过滤
-- 时间范围筛选、失败重试与断点续传
+1. **首次使用**：需要在浏览器中登录知识星球
+2. **登录状态**：系统会保存登录状态，下次无需重新登录
+3. **下载目录**：文件会保存到指定的下载目录
+4. **等待时间**：系统会自动等待页面加载和下载完成
+5. **错误处理**：如果某个步骤失败，系统会继续处理下一个
 
+## 许可证
+
+MIT License
+
+## 更新日志
+
+### v1.0.0 (2024-02-13)
+
+- 新增链接解析下载模式
+- 新增评论过滤功能
+- 新增智能下载按钮识别
+- 新增文件命名功能
+- 新增弹窗自动关闭
+- 新增多文件下载支持
