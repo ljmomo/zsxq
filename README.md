@@ -74,11 +74,6 @@ python3 zsxq_playwright.py --mode links --links-file ./my_links.txt --download-d
 python3 zsxq_playwright.py --mode links --max-links 10
 ```
 
-## 文档
-
-- [需求文档](docs/REQUIREMENTS.md)
-- [技术方案文档](docs/TECHNICAL.md)
-- [使用文档](docs/USAGE.md)
 
 ## 核心流程
 
